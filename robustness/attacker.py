@@ -69,7 +69,8 @@ class Attacker(ch.nn.Module):
         self.normalize = helpers.InputNormalize(dataset.mean, dataset.std)
         self.model = model
 
-    def forward(self, x, target, *_, constraint, eps, step_size, iterations,
+    def forward(self, x, target, *_, constraint, eps, step_size, iterations=None,
+                stop_probability=None,
                 random_start=False, random_restarts=False, do_tqdm=False,
                 targeted=False, custom_loss=None, should_normalize=True,
                 orig_input=None, use_best=True, return_image=True,
@@ -133,6 +134,10 @@ class Attacker(ch.nn.Module):
             from the unit ball, and then use :math:`\delta_{N/2+i} =
             -\delta_{i}`.
         """
+
+        assert iterations or stop_probability, """"You must specify a number of iterations, or a stopping probability. 
+                                                In the latter case, the Russian roulette estimator will be used.)"""
+
         # Can provide a different input to make the feasible set around
         # instead of the initial point
         if orig_input is None: orig_input = x.detach()
@@ -164,6 +169,19 @@ class Attacker(ch.nn.Module):
             # Random start (to escape certain types of gradient masking)
             if random_start:
                 x = step.random_perturb(x)
+            
+            flag_russian_roulette = False
+            if stop_probability and loop_type == 'train':
+                # Get (random) Russian roulette stopping time
+                flag_russian_roulette = True
+                iterations = 0
+                coin = Bernoulli(stop_probability)
+                while coin.rvs():
+                    iterations += 1
+
+                # Initial values for Russian Roulette estimator
+                continue_probability = 1.
+                x_russian_roulette = x.clone().detach()
 
             iterator = range(iterations)
             if do_tqdm: iterator = tqdm(iterator)
@@ -188,6 +206,9 @@ class Attacker(ch.nn.Module):
             # PGD iterates
             for _ in iterator:
                 x = x.clone().detach().requires_grad_(True)
+                if flag_russian_roulette:
+                    x_prev = x.clone().detach()
+
                 losses, out = calc_loss(step.to_image(x), target)
                 assert losses.shape[0] == x.shape[0], \
                         'Shape of losses must match input!'
@@ -209,20 +230,29 @@ class Attacker(ch.nn.Module):
                     grad = None
 
                 with ch.no_grad():
-                    args = [losses, best_loss, x, best_x]
+                    x_candidate = x_russian_roulette if flag_russian_roulette else x
+                    args = [losses, best_loss, x_candidate, best_x]
                     best_loss, best_x = replace_best(*args) if use_best else (losses, x)
 
                     x = step.step(x, grad)
                     x = step.project(x)
+                    if flag_russian_roulette:
+                        continue_probability *= (1 - self.stop_probability)
+                        x_russian_roulette += continue_probability * (x - x_prev)
                     if do_tqdm: iterator.set_description("Current loss: {l}".format(l=loss))
 
             # Save computation (don't compute last loss) if not use_best
+            if flag_russian_roulette:
+                x_ret = x_russian_roulette
+            else:
+                x_ret = x
+
             if not use_best: 
-                ret = x.clone().detach()
+                ret = x_ret.clone().detach() 
                 return step.to_image(ret) if return_image else ret
 
-            losses, _ = calc_loss(step.to_image(x), target)
-            args = [losses, best_loss, x, best_x]
+            losses, _ = calc_loss(step.to_image(x_ret), target)
+            args = [losses, best_loss, x_ret, best_x]
             best_loss, best_x = replace_best(*args)
             return step.to_image(best_x) if return_image else best_x
 

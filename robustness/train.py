@@ -432,11 +432,15 @@ def _model_loop(args, loop_type, loader, model, opt, epoch, adv, writer):
             'eps': eps,
             'step_size': args.attack_lr,
             'iterations': args.attack_steps,
+            'stop_probability': args.stop_probability,
             'random_start': args.random_start,
             'custom_loss': adv_criterion,
             'random_restarts': random_restarts,
-            'use_best': bool(args.use_best)
+            'use_best': bool(args.use_best),
         }
+
+        if loop_type == 'val':
+            attack_kwargs['stop_probability'] = None
 
     iterator = tqdm(enumerate(loader), total=len(loader))
     for i, (inp, target) in iterator:
