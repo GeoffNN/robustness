@@ -30,6 +30,7 @@ called directly---instead, these arguments are passed along from
 import torch as ch
 import dill
 import os
+from scipy.stats import bernoulli as Bernoulli
 if int(os.environ.get("NOTEBOOK_MODE", 0)) == 1:
     from tqdm import tqdm_notebook as tqdm
 else:
@@ -69,7 +70,7 @@ class Attacker(ch.nn.Module):
         self.normalize = helpers.InputNormalize(dataset.mean, dataset.std)
         self.model = model
 
-    def forward(self, x, target, *_, constraint, eps, step_size, iterations=None,
+    def forward(self, x, target, *_, constraint, eps, step_size, iterations,
                 stop_probability=None,
                 random_start=False, random_restarts=False, do_tqdm=False,
                 targeted=False, custom_loss=None, should_normalize=True,
@@ -137,7 +138,6 @@ class Attacker(ch.nn.Module):
 
         assert iterations or stop_probability, """"You must specify a number of iterations, or a stopping probability. 
                                                 In the latter case, the Russian roulette estimator will be used.)"""
-
         # Can provide a different input to make the feasible set around
         # instead of the initial point
         if orig_input is None: orig_input = x.detach()
@@ -166,24 +166,26 @@ class Attacker(ch.nn.Module):
 
         # Main function for making adversarial examples
         def get_adv_examples(x):
+            new_iterations = iterations
+
             # Random start (to escape certain types of gradient masking)
             if random_start:
                 x = step.random_perturb(x)
             
             flag_russian_roulette = False
-            if stop_probability and loop_type == 'train':
+            if stop_probability:
                 # Get (random) Russian roulette stopping time
                 flag_russian_roulette = True
-                iterations = 0
+                new_iterations = 0
                 coin = Bernoulli(stop_probability)
                 while coin.rvs():
-                    iterations += 1
+                    new_iterations += 1
 
                 # Initial values for Russian Roulette estimator
                 continue_probability = 1.
                 x_russian_roulette = x.clone().detach()
 
-            iterator = range(iterations)
+            iterator = range(new_iterations)
             if do_tqdm: iterator = tqdm(iterator)
 
             # Keep track of the "best" (worst-case) loss and its
@@ -237,7 +239,7 @@ class Attacker(ch.nn.Module):
                     x = step.step(x, grad)
                     x = step.project(x)
                     if flag_russian_roulette:
-                        continue_probability *= (1 - self.stop_probability)
+                        continue_probability *= (1 - stop_probability)
                         x_russian_roulette += continue_probability * (x - x_prev)
                     if do_tqdm: iterator.set_description("Current loss: {l}".format(l=loss))
 

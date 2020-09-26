@@ -438,7 +438,6 @@ def _model_loop(args, loop_type, loader, model, opt, epoch, adv, writer):
             'random_restarts': random_restarts,
             'use_best': bool(args.use_best),
         }
-
         if loop_type == 'val':
             attack_kwargs['stop_probability'] = None
 
@@ -517,4 +516,3 @@ def _model_loop(args, loop_type, loader, model, opt, epoch, adv, writer):
                               epoch)
 
     return top1.avg, losses.avg
-
