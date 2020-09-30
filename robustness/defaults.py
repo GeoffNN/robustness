@@ -90,6 +90,7 @@ BY_DATASET=looked up in TRAINING_DEFAULTS at runtime)]`
 
 PGD_ARGS = [
     ['attack-steps', int, 'number of steps for PGD attack', 7],
+    ['stop-prob', float, 'stopping probability for Russian Roulette', REQ],
     ['constraint', list(attacker.STEPS.keys()), 'adv constraint', REQ],
     ['eps', str , 'adversarial perturbation budget', REQ],
     ['attack-lr', str, 'step size for PGD', REQ],

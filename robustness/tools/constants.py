@@ -19,6 +19,7 @@ ATTACK_KWARG_KEYS = [
         'eps',
         'step_size',
         'iterations',
+        'stop_prob',
         'random_start',
         'random_restarts']
 
