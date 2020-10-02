@@ -2,13 +2,13 @@ import subprocess
 from itertools import product
 
 
-OUTDIR = "/home/ubuntu/logs_russian_roulette_adversarial_training/"
+OUTDIR = "/home/ubuntu/logs_russian_roulette_adversarial_training/loss_russian_roulette/"
 EPOCHS = 90
 LOG_ITERS = 3
 
 params = {
     'eps': [0.25, 0.5, 1., 2.],
-    'stop-prob': [1./3, 1./7, 1./20],
+    'stop-prob': [1./3, 1./20],
     'arch': ['resnet18', 'resnet50'],
 }
 
