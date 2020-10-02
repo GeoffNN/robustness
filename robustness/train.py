@@ -616,6 +616,8 @@ def _model_loop_rr(args, loop_type, loader, model, opt, epoch, adv, writer):
             reg_term =  args.regularizer(model, inp, target)
         loss = loss + reg_term
 
+        if len(loss.shape) > 0: loss = loss.mean()
+
         # compute gradient and do SGD step
         opt.zero_grad()
         if args.mixed_precision:
