@@ -4,6 +4,7 @@ import dill
 import os
 from .tools import helpers, constants
 from .attacker import AttackerModel
+from .russian_roulette import RussianRouletteTrainer
 
 class FeatureExtractor(ch.nn.Module):
     '''
@@ -51,7 +52,7 @@ class DummyModel(nn.Module):
         return self.model(x)
 
 def make_and_restore_model(*_, arch, dataset, resume_path=None,
-         parallel=False, pytorch_pretrained=False, add_custom_forward=False):
+         parallel=False, pytorch_pretrained=False, add_custom_forward=False, russian_roulette=False):
     """
     Makes a model and (optionally) restores it from a checkpoint.
 
@@ -85,7 +86,8 @@ def make_and_restore_model(*_, arch, dataset, resume_path=None,
                             isinstance(arch, str) else arch
 
     model = AttackerModel(classifier_model, dataset)
-
+    if russian_roulette:
+        model = RussianRouletteTrainer(classifier_model, dataset)
     # optionally resume from a checkpoint
     checkpoint = None
     if resume_path and os.path.isfile(resume_path):

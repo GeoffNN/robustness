@@ -26,7 +26,6 @@ except Exception as e:
 def check_required_args(args, eval_only=False):
     """
     Check that the required training arguments are present.
-
     Args:
         args (argparse object): the arguments to check
         eval_only (bool) : whether to check only the arguments for evaluation
@@ -60,10 +59,8 @@ def check_required_args(args, eval_only=False):
 def make_optimizer_and_schedule(args, model, checkpoint, params):
     """
     *Internal Function* (called directly from train_model)
-
     Creates an optimizer and a schedule for a given model, restoring from a
     checkpoint if it is non-null.
-
     Args:
         args (object) : an arguments object, see
             :meth:`~robustness.train.train_model` for details
@@ -72,7 +69,6 @@ def make_optimizer_and_schedule(args, model, checkpoint, params):
             with `ch.load`
         params (list|None) : a list of parameters that should be updatable, all
             other params will not update. If ``None``, update all params 
-
     Returns:
         An optimizer (ch.nn.optim.Optimizer) and a scheduler
             (ch.nn.optim.lr_schedulers module).
@@ -131,7 +127,6 @@ def make_optimizer_and_schedule(args, model, checkpoint, params):
 def eval_model(args, model, loader, store):
     """
     Evaluate a model for standard (and optionally adversarial) accuracy.
-
     Args:
         args (object) : A list of arguments---should be a python object 
             implementing ``getattr()`` and ``setattr()``.
@@ -178,7 +173,6 @@ def train_model(args, model, loaders, *, checkpoint=None,
             store=None, update_params=None, disable_no_grad=False):
     """
     Main function for training a model. 
-
     Args:
         args (object) : A python object for arguments, implementing
             ``getattr()`` and ``setattr()`` and having the following
@@ -187,7 +181,6 @@ def train_model(args, model, loaders, *, checkpoint=None,
             :meth:`robustness.defaults.check_and_fill_args` to make sure that
             all required arguments are filled and to fill missing args with
             reasonable defaults:
-
             adv_train (int or bool, *required*)
                 if 1/True, adversarially train, otherwise if 0/False do 
                 standard training
@@ -260,7 +253,6 @@ def train_model(args, model, loaders, *, checkpoint=None,
                 given arguments `model, log_info` where `log_info` is a
                 dictionary with keys `epoch, nat_prec1, adv_prec1, nat_loss,
                 adv_loss, train_prec1, train_loss`.
-
         model (AttackerModel) : the model to train.
         loaders (tuple[iterable]) : `tuple` of data loaders of the form
             `(train_loader, val_loader)` 
@@ -374,13 +366,12 @@ def train_model(args, model, loaders, *, checkpoint=None,
 
     return model
 
+
 def _model_loop(args, loop_type, loader, model, opt, epoch, adv, writer):
     """
     *Internal function* (refer to the train_model and eval_model functions for
     how to train and evaluate models).
-
     Runs a single epoch of either training or evaluating.
-
     Args:
         args (object) : an arguments object (see
             :meth:`~robustness.train.train_model` for list of arguments
@@ -392,7 +383,6 @@ def _model_loop(args, loop_type, loader, model, opt, epoch, adv, writer):
         epoch (int) : which epoch we are currently on
         adv (bool) : whether to evaluate adversarially (otherwise standard)
         writer : tensorboardX writer (optional)
-
     Returns:
         The average top1 accuracy and the average loss across the epoch.
     """
@@ -401,6 +391,12 @@ def _model_loop(args, loop_type, loader, model, opt, epoch, adv, writer):
         raise ValueError(err_msg)
     is_train = (loop_type == 'train')
 
+    if is_train and args.russian_roulette:
+        return _model_loop_rr(args, loop_type, loader, model, opt, epoch, adv, writer)
+        
+    return _model_loop_attacker(adv, loop_type, is_train, model, args, epoch, loader, opt, writer)
+
+def _model_loop_attacker(adv, loop_type, is_train, model, args, epoch, loader, opt, writer):
     losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
@@ -432,18 +428,15 @@ def _model_loop(args, loop_type, loader, model, opt, epoch, adv, writer):
             'eps': eps,
             'step_size': args.attack_lr,
             'iterations': args.attack_steps,
-            'stop_probability': args.stop_probability,
             'random_start': args.random_start,
             'custom_loss': adv_criterion,
             'random_restarts': random_restarts,
-            'use_best': bool(args.use_best),
+            'use_best': bool(args.use_best)
         }
-        if loop_type == 'val':
-            attack_kwargs['stop_probability'] = None
 
     iterator = tqdm(enumerate(loader), total=len(loader))
     for i, (inp, target) in iterator:
-       # measure data loading time
+        # measure data loading time
         target = target.cuda(non_blocking=True)
         output, final_inp = model(inp, target=target, make_adv=adv,
                                   **attack_kwargs)
@@ -494,6 +487,143 @@ def _model_loop(args, loop_type, loader, model, opt, epoch, adv, writer):
             writer.add_image('Nat input', nat_grid, epoch)
             writer.add_image('Adv input', adv_grid, epoch)
 
+        # ITERATOR
+        desc = ('{2} Epoch:{0} | Loss {loss.avg:.4f} | '
+                '{1}1 {top1_acc:.3f} | {1}5 {top5_acc:.3f} | '
+                'Reg term: {reg} ||'.format( epoch, prec, loop_msg, 
+                loss=losses, top1_acc=top1_acc, top5_acc=top5_acc, reg=reg_term))
+
+        # USER-DEFINED HOOK
+        if has_attr(args, 'iteration_hook'):
+            args.iteration_hook(model, i, loop_type, inp, target)
+
+        iterator.set_description(desc)
+        iterator.refresh()
+
+    if writer is not None:
+        prec_type = 'adv' if adv else 'nat'
+        descs = ['loss', 'top1', 'top5']
+        vals = [losses, top1, top5]
+        for d, v in zip(descs, vals):
+            writer.add_scalar('_'.join([prec_type, loop_type, d]), v.avg,
+                              epoch)
+
+    return top1.avg, losses.avg
+
+
+
+def _model_loop_rr(args, loop_type, loader, model, opt, epoch, adv, writer):
+    """
+    *Internal function* (refer to the train_model and eval_model functions for
+    how to train and evaluate models).
+    Runs a single epoch of either training or evaluating.
+    Args:
+        args (object) : an arguments object (see
+            :meth:`~robustness.train.train_model` for list of arguments
+        loop_type ('train' or 'val') : whether we are training or evaluating
+        loader (iterable) : an iterable loader of the form 
+            `(image_batch, label_batch)`
+        model (RussianRouletteTrainer) : model to train/evaluate
+        opt (ch.optim.Optimizer) : optimizer to use (ignored for evaluation)
+        epoch (int) : which epoch we are currently on
+        adv (bool) : whether to evaluate adversarially (otherwise standard)
+        writer : tensorboardX writer (optional)
+    Returns:
+        The average top1 accuracy and the average loss across the epoch.
+    """
+    if not loop_type in ['train', 'val']:
+        err_msg = "loop_type ({0}) must be 'train' or 'val'".format(loop_type)
+        raise ValueError(err_msg)
+    
+    is_train = (loop_type == 'train')
+
+    losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+
+    prec = 'NatPrec' if not adv else 'AdvPrec'
+    loop_msg = 'Train' if loop_type == 'train' else 'Val'
+
+    # switch to train/eval mode depending
+    model = model.train() if is_train else model.eval()
+
+    # If adv training (or evaling), set eps and random_restarts appropriately
+    if adv:
+        eps = args.custom_eps_multiplier(epoch) * args.eps \
+                if (is_train and args.custom_eps_multiplier) else args.eps
+        random_restarts = 0 if is_train else args.random_restarts
+
+    # Custom training criterion
+    has_custom_train_loss = has_attr(args, 'custom_train_loss')
+    train_criterion = args.custom_train_loss if has_custom_train_loss \
+            else ch.nn.CrossEntropyLoss()
+    
+    has_custom_adv_loss = has_attr(args, 'custom_adv_loss')
+    adv_criterion = args.custom_adv_loss if has_custom_adv_loss else None
+
+    attack_kwargs = {}
+    if adv:
+        attack_kwargs = {
+            'constraint': args.constraint,
+            'eps': eps,
+            'step_size': args.attack_lr,
+            'iterations': args.attack_steps,
+            'random_start': args.random_start,
+            'custom_loss': adv_criterion,
+            'random_restarts': random_restarts,
+            'use_best': bool(args.use_best),
+            'stop_probability': args.stop_prob,
+        }
+
+    iterator = tqdm(enumerate(loader), total=len(loader))
+    for i, (inp, target) in iterator:
+        attack_kwargs['russian_roulette'] = False  # First log the accuracy
+       # measure data loading time
+        target = target.cuda(non_blocking=True)
+        output, final_inp = model(inp, target=target, make_adv=adv,
+                                **attack_kwargs)
+        loss = train_criterion(output, target)
+
+        if len(loss.shape) > 0: loss = loss.mean()
+
+        model_logits = output[0] if (type(output) is tuple) else output
+
+        # measure accuracy and record loss
+        top1_acc = float('nan')
+        top5_acc = float('nan')
+        try:
+            maxk = min(5, model_logits.shape[-1])
+            if has_attr(args, "custom_accuracy"):
+                prec1, prec5 = args.custom_accuracy(model_logits, target)
+            else:
+                prec1, prec5 = helpers.accuracy(model_logits, target, topk=(1, maxk))
+                prec1, prec5 = prec1[0], prec5[0]
+
+            losses.update(loss.item(), inp.size(0))
+            top1.update(prec1, inp.size(0))
+            top5.update(prec5, inp.size(0))
+
+            top1_acc = top1.avg
+            top5_acc = top5.avg
+        except:
+            warnings.warn('Failed to calculate the accuracy.')
+            
+        # Training happens here
+        attack_kwargs['russian_roulette'] = True
+        loss = model(inp, target, make_adv=adv, **attack_kwargs)
+        reg_term = 0.0
+        if has_attr(args, "regularizer"):
+            reg_term =  args.regularizer(model, inp, target)
+        loss = loss + reg_term
+
+        # compute gradient and do SGD step
+        opt.zero_grad()
+        if args.mixed_precision:
+            with amp.scale_loss(loss, opt) as sl:
+                sl.backward()
+        else:
+            loss.backward()
+        opt.step()
         # ITERATOR
         desc = ('{2} Epoch:{0} | Loss {loss.avg:.4f} | '
                 '{1}1 {top1_acc:.3f} | {1}5 {top5_acc:.3f} | '

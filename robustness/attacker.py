@@ -1,10 +1,8 @@
 """
 **For most use cases, this can just be considered an internal class and
 ignored.**
-
 This module houses the :class:`robustness.attacker.Attacker` and
 :class:`robustness.attacker.AttackerModel` classes. 
-
 :class:`~robustness.attacker.Attacker` is an internal class that should not be
 imported/called from outside the library.
 :class:`~robustness.attacker.AttackerModel` is a "wrapper" class which is fed a
@@ -13,14 +11,11 @@ options. See :meth:`robustness.attacker.AttackerModel.forward` for documentation
 on which arguments AttackerModel supports, and see
 :meth:`robustness.attacker.Attacker.forward` for the arguments pertaining to
 adversarial examples specifically.
-
 For a demonstration of this module in action, see the walkthrough
 ":doc:`../example_usage/input_space_manipulation`"
-
 **Note 1**: :samp:`.forward()` should never be called directly but instead the
 AttackerModel object itself should be called, just like with any
 :samp:`nn.Module` subclass.
-
 **Note 2**: Even though the adversarial example arguments are documented in
 :meth:`robustness.attacker.Attacker.forward`, this function should never be
 called directly---instead, these arguments are passed along from
@@ -30,7 +25,6 @@ called directly---instead, these arguments are passed along from
 import torch as ch
 import dill
 import os
-from scipy.stats import bernoulli as Bernoulli
 if int(os.environ.get("NOTEBOOK_MODE", 0)) == 1:
     from tqdm import tqdm_notebook as tqdm
 else:
@@ -50,18 +44,15 @@ STEPS = {
 class Attacker(ch.nn.Module):
     """
     Attacker class, used to make adversarial examples.
-
     This is primarily an internal class, you probably want to be looking at
     :class:`robustness.attacker.AttackerModel`, which is how models are actually
     served (AttackerModel uses this Attacker class).
-
     However, the :meth:`robustness.Attacker.forward` function below
     documents the arguments supported for adversarial attacks specifically.
     """
     def __init__(self, model, dataset):
         """
         Initialize the Attacker
-
         Args:
             nn.Module model : the PyTorch model to attack
             Dataset dataset : dataset the model is trained on, only used to get mean and std for normalization
@@ -71,17 +62,15 @@ class Attacker(ch.nn.Module):
         self.model = model
 
     def forward(self, x, target, *_, constraint, eps, step_size, iterations,
-                stop_probability=None,
                 random_start=False, random_restarts=False, do_tqdm=False,
                 targeted=False, custom_loss=None, should_normalize=True,
                 orig_input=None, use_best=True, return_image=True,
-                est_grad=None, mixed_precision=False):
+                est_grad=None, mixed_precision=False, **kwargs):
         """
         Implementation of forward (finds adversarial examples). Note that
         this does **not** perform inference and should not be called
         directly; refer to :meth:`robustness.attacker.AttackerModel.forward`
         for the function you should actually be calling.
-
         Args:
             x, target (ch.tensor) : see :meth:`robustness.attacker.AttackerModel.forward`
             constraint
@@ -127,17 +116,12 @@ class Attacker(ch.nn.Module):
         Returns:
             An adversarial example for x (i.e. within a feasible set
             determined by `eps` and `constraint`, but classified as:
-
             * `target` (if `targeted == True`)
             *  not `target` (if `targeted == False`)
-
         .. [#f1] This means that we actually draw :math:`N/2` random vectors
             from the unit ball, and then use :math:`\delta_{N/2+i} =
             -\delta_{i}`.
         """
-
-        assert iterations or stop_probability, """"You must specify a number of iterations, or a stopping probability. 
-                                                In the latter case, the Russian roulette estimator will be used.)"""
         # Can provide a different input to make the feasible set around
         # instead of the initial point
         if orig_input is None: orig_input = x.detach()
@@ -166,26 +150,11 @@ class Attacker(ch.nn.Module):
 
         # Main function for making adversarial examples
         def get_adv_examples(x):
-            new_iterations = iterations
-
             # Random start (to escape certain types of gradient masking)
             if random_start:
                 x = step.random_perturb(x)
-            
-            flag_russian_roulette = False
-            if stop_probability:
-                # Get (random) Russian roulette stopping time
-                flag_russian_roulette = True
-                new_iterations = 0
-                coin = Bernoulli(stop_probability)
-                while coin.rvs():
-                    new_iterations += 1
 
-                # Initial values for Russian Roulette estimator
-                continue_probability = 1.
-                x_russian_roulette = x.clone().detach()
-
-            iterator = range(new_iterations)
+            iterator = range(iterations)
             if do_tqdm: iterator = tqdm(iterator)
 
             # Keep track of the "best" (worst-case) loss and its
@@ -208,9 +177,6 @@ class Attacker(ch.nn.Module):
             # PGD iterates
             for _ in iterator:
                 x = x.clone().detach().requires_grad_(True)
-                if flag_russian_roulette:
-                    x_prev = x.clone().detach()
-
                 losses, out = calc_loss(step.to_image(x), target)
                 assert losses.shape[0] == x.shape[0], \
                         'Shape of losses must match input!'
@@ -232,29 +198,20 @@ class Attacker(ch.nn.Module):
                     grad = None
 
                 with ch.no_grad():
-                    x_candidate = x_russian_roulette if flag_russian_roulette else x
-                    args = [losses, best_loss, x_candidate, best_x]
+                    args = [losses, best_loss, x, best_x]
                     best_loss, best_x = replace_best(*args) if use_best else (losses, x)
 
                     x = step.step(x, grad)
                     x = step.project(x)
-                    if flag_russian_roulette:
-                        continue_probability *= (1 - stop_probability)
-                        x_russian_roulette += continue_probability * (x - x_prev)
                     if do_tqdm: iterator.set_description("Current loss: {l}".format(l=loss))
 
             # Save computation (don't compute last loss) if not use_best
-            if flag_russian_roulette:
-                x_ret = x_russian_roulette
-            else:
-                x_ret = x
-
             if not use_best: 
-                ret = x_ret.clone().detach() 
+                ret = x.clone().detach()
                 return step.to_image(ret) if return_image else ret
 
-            losses, _ = calc_loss(step.to_image(x_ret), target)
-            args = [losses, best_loss, x_ret, best_x]
+            losses, _ = calc_loss(step.to_image(x), target)
+            args = [losses, best_loss, x, best_x]
             best_loss, best_x = replace_best(*args)
             return step.to_image(best_x) if return_image else best_x
 
@@ -287,7 +244,6 @@ class AttackerModel(ch.nn.Module):
     Wrapper class for adversarial attacks on models. Given any normal
     model (a ``ch.nn.Module`` instance), wrapping it in AttackerModel allows
     for convenient access to adversarial attacks and other applications.::
-
         model = ResNet50()
         model = AttackerModel(model)
         x = ch.rand(10, 3, 32, 32) # random images
@@ -295,7 +251,6 @@ class AttackerModel(ch.nn.Module):
         out, new_im = model(x, y, make_adv=True) # adversarial attack
         out, new_im = model(x, y, make_adv=True, targeted=True) # targeted attack
         out = model(x) # normal inference (no label needed)
-
     More code examples available in the documentation for `forward`.
     For a more comprehensive overview of this class, see 
     :doc:`our detailed walkthrough <../example_usage/input_space_manipulation>`.
@@ -311,7 +266,6 @@ class AttackerModel(ch.nn.Module):
         """
         Main function for running inference and generating adversarial
         examples for a model.
-
         Parameters:
             inp (ch.tensor) : input to do inference on [N x input_shape] (e.g. NCHW)
             target (ch.tensor) : ignored if `make_adv == False`. Otherwise,
@@ -336,7 +290,6 @@ class AttackerModel(ch.nn.Module):
                 visible effect without :samp:`with_latent=True`.
             with_image (bool) : if :samp:`False`, only return the model output
                 (even if :samp:`make_adv == True`).
-
         """
         if make_adv:
             assert target is not None
