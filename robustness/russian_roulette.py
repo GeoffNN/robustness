@@ -37,10 +37,11 @@ class RussianRouletteTrainer(ch.nn.Module):
                                   no_relu=no_relu)
         loss = self.criterion(initial_output, target)
         if iterations:
-            attacker_kwargs['iterations'] = iterations
+            attacker_kwargs['iterations'] = iterations - 1
 
             self.eval()
             _, prev_adv = self.attacker(inp, target, make_adv=True, **attacker_kwargs)
+            attacker_kwargs['iterations'] = 1
             normalized_prev_adv = self.normalizer(prev_adv)
             _, adv = self.attacker(prev_adv, target, make_adv=True, **attacker_kwargs)
             normalized_adv = self.normalizer(adv)
