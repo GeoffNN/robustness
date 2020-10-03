@@ -538,6 +538,7 @@ def _model_loop_rr(args, loop_type, loader, model, opt, epoch, adv, writer):
     is_train = (loop_type == 'train')
 
     losses = AverageMeter()
+    losses_RR = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
 
@@ -577,8 +578,8 @@ def _model_loop_rr(args, loop_type, loader, model, opt, epoch, adv, writer):
 
     iterator = tqdm(enumerate(loader), total=len(loader))
     for i, (inp, target) in iterator:
-        attack_kwargs['russian_roulette'] = False  # First log the accuracy
-       # measure data loading time
+        attack_kwargs['iterations'] = args.attack_steps
+        # measure data loading time
         target = target.cuda(non_blocking=True)
         output, final_inp = model(inp, target=target, make_adv=adv,
                                 **attack_kwargs)
@@ -609,14 +610,14 @@ def _model_loop_rr(args, loop_type, loader, model, opt, epoch, adv, writer):
             warnings.warn('Failed to calculate the accuracy.')
             
         # Training happens here
-        attack_kwargs['russian_roulette'] = True
-        loss = model(inp, target, make_adv=adv, **attack_kwargs)
+        loss = model(inp, target, make_adv=adv, russian_roulette=True, **attack_kwargs)
         reg_term = 0.0
         if has_attr(args, "regularizer"):
             reg_term =  args.regularizer(model, inp, target)
         loss = loss + reg_term
 
         if len(loss.shape) > 0: loss = loss.mean()
+        losses_RR.update(loss.item(), inp.size(0))
 
         # compute gradient and do SGD step
         opt.zero_grad()
@@ -628,9 +629,10 @@ def _model_loop_rr(args, loop_type, loader, model, opt, epoch, adv, writer):
         opt.step()
         # ITERATOR
         desc = ('{2} Epoch:{0} | Loss {loss.avg:.4f} | '
+                'Loss RR {loss_RR.avg:.4f} | '
                 '{1}1 {top1_acc:.3f} | {1}5 {top5_acc:.3f} | '
                 'Reg term: {reg} ||'.format( epoch, prec, loop_msg, 
-                loss=losses, top1_acc=top1_acc, top5_acc=top5_acc, reg=reg_term))
+                loss=losses, loss_RR=losses_RR, top1_acc=top1_acc, top5_acc=top5_acc, reg=reg_term))
 
         # USER-DEFINED HOOK
         if has_attr(args, 'iteration_hook'):

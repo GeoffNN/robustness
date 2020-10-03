@@ -8,7 +8,7 @@ LOG_ITERS = 3
 
 params = {
     'eps': [0.25, 0.5, 1., 2.],
-    'stop-prob': [1./3, 1./20],
+    'stop-prob': [1 - 1./3, 1 - 1./20],
     'arch': ['resnet18', 'resnet50'],
 }
 

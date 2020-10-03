@@ -16,7 +16,7 @@ class RussianRouletteTrainer(ch.nn.Module):
         self.model = model
         self.dataset = dataset
         self.attacker = AttackerModel(model, dataset)
-        self.criterion = ch.nn.CrossEntropyLoss()
+        self.criterion = ch.nn.CrossEntropyLoss(reduction='mean')
     
     def forward(self, inp, target=None, make_adv=False, 
                 with_latent=False, stop_probability=1./20,
@@ -43,7 +43,7 @@ class RussianRouletteTrainer(ch.nn.Module):
             _, prev_adv = self.attacker(inp, target, make_adv=True, **attacker_kwargs)
             attacker_kwargs['iterations'] = 1
             normalized_prev_adv = self.normalizer(prev_adv)
-            _, adv = self.attacker(prev_adv, target, make_adv=True, **attacker_kwargs)
+            _, adv = self.attacker(prev_adv, target, make_adv=True, orig_input=inp, **attacker_kwargs)
             normalized_adv = self.normalizer(adv)
 
             # Get the losses with gradients
@@ -52,9 +52,9 @@ class RussianRouletteTrainer(ch.nn.Module):
                                   no_relu=no_relu)
             output = self.model(normalized_adv, with_latent=with_latent, fake_relu=fake_relu,
                                 no_relu=no_relu)
-            
-            loss += (1-stop_probability) ** (-iterations) / stop_probability *\
-                     (self.criterion(output, target) - self.criterion(prev_output, target))
+            loss_update = self.criterion(output, target) - self.criterion(prev_output, target)
+            upweighting =  (1 - stop_probability) ** (-iterations) / stop_probability
+            loss += upweighting * loss_update
 
         return loss
             
