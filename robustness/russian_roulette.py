@@ -60,7 +60,7 @@ class RussianRouletteTrainer(ch.nn.Module):
             loss_update = self.criterion(output, target) - self.criterion(prev_output, target)
             # loss_update = F.relu(loss_update)
             upweighting =  (1 - stop_probability) ** (-iterations) / stop_probability
-            loss += upweighting * abs(loss_update)
+            loss += upweighting * loss_update
 
         return loss
             
