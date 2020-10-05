@@ -643,8 +643,8 @@ def _model_loop_rr(args, loop_type, loader, model, opt, epoch, adv, writer):
 
     if writer is not None:
         prec_type = 'adv' if adv else 'nat'
-        descs = ['loss', 'top1', 'top5']
-        vals = [losses, top1, top5]
+        descs = ['loss', 'loss_RR', 'top1', 'top5']
+        vals = [losses, losses_RR, top1, top5]
         for d, v in zip(descs, vals):
             writer.add_scalar('_'.join([prec_type, loop_type, d]), v.avg,
                               epoch)

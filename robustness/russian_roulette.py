@@ -1,4 +1,6 @@
+import copy
 import torch as ch
+import torch.nn.functional as F
 from scipy.stats import geom
 
 from .attacker import AttackerModel
@@ -34,27 +36,31 @@ class RussianRouletteTrainer(ch.nn.Module):
         iterations = geom.rvs(stop_probability, loc=-1)
 
         initial_output = self.model(inp, with_latent=with_latent, fake_relu=fake_relu,
-                                  no_relu=no_relu)
+                                no_relu=no_relu)
         loss = self.criterion(initial_output, target)
+
         if iterations:
             attacker_kwargs['iterations'] = iterations - 1
 
             self.eval()
             _, prev_adv = self.attacker(inp, target, make_adv=True, **attacker_kwargs)
             attacker_kwargs['iterations'] = 1
-            normalized_prev_adv = self.normalizer(prev_adv)
-            _, adv = self.attacker(prev_adv, target, make_adv=True, orig_input=inp, **attacker_kwargs)
-            normalized_adv = self.normalizer(adv)
+            prev_adv2 = prev_adv.clone().detach()
+            _, adv = self.attacker(prev_adv2, target, make_adv=True, orig_input=inp, **attacker_kwargs)
 
             # Get the losses with gradients
             self.train() 
-            prev_output = self.model(normalized_prev_adv, with_latent=with_latent, fake_relu=fake_relu,
+            # normalized_prev_adv = self.normalizer(prev_adv)
+            # normalized_adv = self.normalizer(adv)
+
+            prev_output = self.model(prev_adv2, with_latent=with_latent, fake_relu=fake_relu,
                                   no_relu=no_relu)
-            output = self.model(normalized_adv, with_latent=with_latent, fake_relu=fake_relu,
+            output = self.model(adv, with_latent=with_latent, fake_relu=fake_relu,
                                 no_relu=no_relu)
             loss_update = self.criterion(output, target) - self.criterion(prev_output, target)
+            # loss_update = F.relu(loss_update)
             upweighting =  (1 - stop_probability) ** (-iterations) / stop_probability
-            loss += upweighting * loss_update
+            loss += upweighting * abs(loss_update)
 
         return loss
             
